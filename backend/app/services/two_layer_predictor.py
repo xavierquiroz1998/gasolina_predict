@@ -78,6 +78,70 @@ def _get_derivative_price(fuel_type: str) -> dict:
         return {"price": None, "source": "unavailable", "ticker": None}
 
 
+def _get_band_and_ppi_history(fuel_type: str) -> tuple[list[str], list[float]]:
+    """Obtiene el historial de estados de banda y precios PPI para el Decreto 444.
+
+    Lee los ultimos 6 registros de la BD para verificar las condiciones del
+    mecanismo excepcional. Si no hay BD disponible, retorna listas vacias
+    (el Decreto 444 no se activara sin historial suficiente).
+
+    Returns:
+        Tupla (band_history, ppi_history):
+          - band_history: lista de str con estados "TECHO"/"DENTRO"/"PISO" de meses previos
+          - ppi_history: lista de float con precios PPI (RBOB o ULSD) de meses previos
+    """
+    try:
+        from app.config import settings as cfg
+        if not cfg.DB_ENABLED:
+            return [], []
+        from app.database.connection import SessionLocal
+        from app.database.models import FuelPrice
+        from sqlalchemy import desc
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(FuelPrice)
+                .filter(FuelPrice.fuel_type == fuel_type)
+                .order_by(desc(FuelPrice.date))
+                .limit(8)
+                .all()
+            )
+            if not rows or len(rows) < 2:
+                return [], []
+
+            rows = list(reversed(rows))  # del mas antiguo al mas reciente
+
+            # Reconstruir estados de banda comparando precios consecutivos
+            band_history = []
+            for i in range(1, len(rows)):
+                prev = float(rows[i - 1].price)
+                curr = float(rows[i].price)
+                if prev <= 0:
+                    continue
+                change_pct = (curr - prev) / prev
+                techo_limit = prev * 1.05
+                piso_limit = prev * 0.90
+                tol = 0.005
+                if curr >= techo_limit - tol:
+                    band_history.append("TECHO")
+                elif curr <= piso_limit + tol:
+                    band_history.append("PISO")
+                else:
+                    band_history.append("DENTRO")
+
+            # Para PPI usamos los precios del combustible como proxy
+            # (en produccion se podrian guardar los RBOB/ULSD en una tabla separada)
+            ppi_history = [float(r.price) for r in rows]
+
+            return band_history, ppi_history
+        finally:
+            db.close()
+    except Exception as e:
+        logger.debug("No se pudo leer historial para Decreto 444: %s", e)
+        return [], []
+
+
 class TwoLayerPredictor:
     """Predictor de 2 capas: WTI diario -> Formula gobierno -> Banda de precios.
 
@@ -128,17 +192,22 @@ class TwoLayerPredictor:
         current_fuel_price: float,
         fuel_type: str,
         derivative_price: float = None,
+        band_history: list[str] | None = None,
+        ppi_history: list[float] | None = None,
     ) -> dict:
         """Convierte precio de referencia en precio final de combustible aplicando formula y banda.
 
         Usa el derivado refinado (RBOB/ULSD) si esta disponible — es el indicador
         real del Decreto 308. Si no, usa WTI crudo como proxy.
+        Aplica el mecanismo excepcional del Decreto 444 si los historiales lo justifican.
 
         Args:
             wti_price: Precio del WTI en USD/barril (proxy o para Super 95).
             current_fuel_price: Precio vigente del combustible (base para la banda).
             fuel_type: Tipo de combustible (extra, ecopais, super_95, diesel).
             derivative_price: Precio RBOB o ULSD Platts USGC en $/galon (opcional).
+            band_history: Historial de estados de banda para Decreto 444 (opcional).
+            ppi_history: Historial de precios PPI/RBOB/ULSD para Decreto 444 (opcional).
 
         Returns:
             Dict con precio final, estado de banda, precio teorico, limites y desglose.
@@ -148,8 +217,12 @@ class TwoLayerPredictor:
             wti_price, fuel_type, derivative_price=derivative_price
         )
 
-        # Aplicar banda asimetrica
-        band_result = self._band_calc.apply_band(current_fuel_price, theoretical_price, fuel_type)
+        # Aplicar banda asimetrica + mecanismo excepcional Decreto 444
+        band_result = self._band_calc.apply_band(
+            current_fuel_price, theoretical_price, fuel_type,
+            band_history=band_history,
+            ppi_history=ppi_history,
+        )
 
         # Desglose de la formula
         breakdown = self._band_calc.get_formula_breakdown(wti_price, fuel_type)
@@ -164,6 +237,8 @@ class TwoLayerPredictor:
             "change_pct": band_result["change_pct"],
             "wti_used": round(wti_price, 2),
             "derivative_used": round(derivative_price, 4) if derivative_price else None,
+            "decreto444_applied": band_result.get("decreto444_applied", False),
+            "decreto444_reduction": band_result.get("decreto444_reduction", 0.0),
             "formula_breakdown": breakdown,
         }
 
@@ -195,6 +270,9 @@ class TwoLayerPredictor:
         derivative_info = _get_derivative_price(fuel_type)
         derivative_price = derivative_info.get("price")
 
+        # Historiales para el Decreto 444
+        band_history, ppi_history = _get_band_and_ppi_history(fuel_type)
+
         # Capa 1: Predecir WTI (sigue siendo util para Super 95 y como referencia)
         self._ensure_trained()
         wti_result = self._wti_predictor.predict_wti_avg_for_next_month()
@@ -203,8 +281,11 @@ class TwoLayerPredictor:
         wti_lower = wti_result.get("confidence_interval", {}).get("lower", wti_avg * 0.95)
         wti_upper = wti_result.get("confidence_interval", {}).get("upper", wti_avg * 1.05)
 
-        # Capa 2: Formula del gobierno + banda (con derivado si disponible)
-        fuel_result = self._wti_to_fuel_price(wti_avg, current_price, fuel_type, derivative_price)
+        # Capa 2: Formula del gobierno + banda + Decreto 444
+        fuel_result = self._wti_to_fuel_price(
+            wti_avg, current_price, fuel_type, derivative_price,
+            band_history=band_history, ppi_history=ppi_history,
+        )
 
         # Intervalos de confianza del precio final usando bounds del WTI
         fuel_lower = self._wti_to_fuel_price(wti_lower, current_price, fuel_type, derivative_price)
@@ -233,6 +314,8 @@ class TwoLayerPredictor:
             "band_status": fuel_result["band_status"],
             "max_price": fuel_result["max_price"],
             "min_price": fuel_result["min_price"],
+            "decreto444_applied": fuel_result.get("decreto444_applied", False),
+            "decreto444_reduction": fuel_result.get("decreto444_reduction", 0.0),
             "derivative_indicator": derivative_info,
             "layer_1_wti": wti_result,
             "layer_2_formula": fuel_result["formula_breakdown"],

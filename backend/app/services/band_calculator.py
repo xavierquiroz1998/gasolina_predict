@@ -6,6 +6,11 @@ El sistema de bandas asimetricas establece:
 - La Super 95 tiene precio libre (no aplica el sistema de bandas)
 - Los precios se actualizan el dia 11 de cada mes
 - Decreto Ejecutivo No. 308 (junio 2024) establece las bandas asimetricas
+- Decreto Ejecutivo No. 83 (ago 2025) incorpora costo de capital 10.78%
+- Decreto Ejecutivo No. 444 (jul 2026) agrega mecanismo excepcional de volatilidad:
+    Cuando el PPI cayo >=15% en 2 periodos tras subir >=50% en 3 periodos previos
+    Y Ecuador aplico TECHO en los 2 ultimos ajustes, se aplica una reduccion
+    adicional de hasta 1.5% mensual (10% de la variacion acumulada del PPI).
 
 La formula de precio:
 Precio final = Precio en Terminal (con IVA) + Margen de Comercializacion (con IVA)
@@ -167,19 +172,34 @@ class BandCalculator:
 
         return round(max(theoretical_price, 0.50), 3)
 
-    def apply_band(self, current_price: float, theoretical_price: float, fuel_type: str) -> dict:
-        """Aplica la banda de precios (+5% techo, -10% piso).
+    def apply_band(
+        self,
+        current_price: float,
+        theoretical_price: float,
+        fuel_type: str,
+        band_history: list[str] | None = None,
+        ppi_history: list[float] | None = None,
+    ) -> dict:
+        """Aplica la banda de precios (+5% techo, -10% piso) y el Decreto 444.
 
         Para combustibles con sistema de bandas, limita el cambio mensual.
         Para Super 95 (precio libre), no aplica limites.
+
+        El Decreto 444 (jul 2026) puede generar una reduccion adicional de hasta
+        1.5% cuando el mecanismo excepcional se activa (ver _apply_decreto444).
 
         Args:
             current_price: Precio vigente actual (USD/galon).
             theoretical_price: Precio calculado por formula de costo.
             fuel_type: Tipo de combustible.
+            band_history: Lista con los estados de banda de los N meses anteriores
+                          (ej. ["TECHO", "TECHO"]). Se usa para verificar condicion
+                          del Decreto 444. Si es None, se asume que NO se activa.
+            ppi_history: Lista con precios PPI (RBOB/ULSD) de los ultimos meses
+                         para calcular variaciones acumuladas del Decreto 444.
 
         Returns:
-            Dict con precio resultante, estado de banda y limites.
+            Dict con precio resultante, estado de banda, limites y flag decreto444.
         """
         fuel_config = settings.FUEL_TYPES.get(fuel_type, {})
         has_band = fuel_config.get("band_system", True)
@@ -194,6 +214,8 @@ class BandCalculator:
                 "max_price": None,
                 "min_price": None,
                 "change_pct": round(change_pct, 2),
+                "decreto444_applied": False,
+                "decreto444_reduction": 0.0,
             }
 
         max_increase = fuel_config.get("max_increase", 0.05)
@@ -215,6 +237,23 @@ class BandCalculator:
             status = "DENTRO"
             capped = False
 
+        # Decreto 444: aplicar reduccion excepcional si las condiciones se cumplen
+        decreto444_applied = False
+        decreto444_reduction = 0.0
+        if settings.DECRETO444_ACTIVE and fuel_type != "super_95":
+            d444 = self._apply_decreto444(
+                current_price=current_price,
+                result_price=result_price,
+                band_status=status,
+                band_history=band_history or [],
+                ppi_history=ppi_history or [],
+            )
+            if d444["applies"]:
+                result_price = d444["adjusted_price"]
+                status = d444["adjusted_status"]
+                decreto444_applied = True
+                decreto444_reduction = d444["reduction_applied"]
+
         change_pct = ((result_price - current_price) / current_price) * 100 if current_price > 0 else 0
 
         return {
@@ -224,6 +263,111 @@ class BandCalculator:
             "max_price": max_price,
             "min_price": min_price,
             "change_pct": round(change_pct, 2),
+            "decreto444_applied": decreto444_applied,
+            "decreto444_reduction": round(decreto444_reduction, 4),
+        }
+
+    def _apply_decreto444(
+        self,
+        current_price: float,
+        result_price: float,
+        band_status: str,
+        band_history: list[str],
+        ppi_history: list[float],
+    ) -> dict:
+        """Evalua y aplica el mecanismo excepcional del Decreto Ejecutivo 444.
+
+        Decreto Ejecutivo No. 444, firmado el 9 de julio de 2026.
+        Reforma el D.E. 83 (Decreto 308 codificado) incorporando un mecanismo
+        temporal para reducir asimetrias entre PPI y precio en terminal.
+
+        Condiciones de activacion (las 3 simultaneas):
+          1. PPI acumulo caida acumulada >= 15% en los 2 periodos bimestrales previos
+          2. PPI acumulo alza previa >= 50% en hasta 3 periodos trimestrales anteriores
+          3. El Precio en Terminal alcanzo TECHO (+5%) en los 2 ultimos ajustes
+
+        Formula de reduccion:
+          reduccion = 10% * variacion_acumulada_PPI_2_periodos
+          tope: max 1.5% del precio vigente por mes
+
+        Args:
+            current_price: Precio vigente (base para calcular el tope de 1.5%).
+            result_price: Precio ya calculado con la banda ordinaria.
+            band_status: Estado de banda del mes actual (TECHO/DENTRO/PISO).
+            band_history: Historial de estados de banda de meses anteriores.
+            ppi_history: Historial de precios PPI (RBOB/ULSD) en $/galon,
+                         ordenados del mas antiguo al mas reciente.
+
+        Returns:
+            Dict con: applies (bool), adjusted_price, adjusted_status,
+                      reduction_applied, conditions_met.
+        """
+        no_apply = {
+            "applies": False,
+            "adjusted_price": result_price,
+            "adjusted_status": band_status,
+            "reduction_applied": 0.0,
+            "conditions_met": {},
+        }
+
+        cfg = settings
+
+        # Condicion 3: los 2 ultimos ajustes fueron TECHO
+        techos_requeridos = cfg.DECRETO444_TECHOS_REQUERIDOS  # 2
+        if len(band_history) < techos_requeridos:
+            return no_apply
+        recent_bands = band_history[-techos_requeridos:]
+        cond3 = all(b == "TECHO" for b in recent_bands)
+
+        # Condicion 1: PPI cayo >= 15% acumulado en los 2 ultimos periodos
+        # Necesitamos al menos 3 puntos PPI para calcular 2 periodos de variacion
+        cond1 = False
+        ppi_caida_acumulada = 0.0
+        if len(ppi_history) >= 3:
+            ppi_recientes = ppi_history[-3:]
+            # variacion periodo 1: entre punto -3 y -2
+            var1 = (ppi_recientes[1] - ppi_recientes[0]) / ppi_recientes[0] if ppi_recientes[0] > 0 else 0
+            # variacion periodo 2: entre punto -2 y -1 (mas reciente)
+            var2 = (ppi_recientes[2] - ppi_recientes[1]) / ppi_recientes[1] if ppi_recientes[1] > 0 else 0
+            ppi_caida_acumulada = var1 + var2
+            cond1 = ppi_caida_acumulada <= -cfg.DECRETO444_PPI_CAIDA_MIN  # negativo = caida
+
+        # Condicion 2: PPI subia >= 50% acumulado en los 3 periodos trimestrales previos a la caida
+        # Necesitamos puntos PPI anteriores a los recientes
+        cond2 = False
+        ppi_alza_previa = 0.0
+        if len(ppi_history) >= 6:
+            ppi_previos = ppi_history[-6:-3]
+            # Variacion acumulada de los 3 periodos previos (antes de la caida)
+            if ppi_previos[0] > 0:
+                ppi_alza_previa = (ppi_previos[-1] - ppi_previos[0]) / ppi_previos[0]
+                cond2 = ppi_alza_previa >= cfg.DECRETO444_PPI_ALZA_PREVIA
+        else:
+            # Si no hay suficiente historial PPI pero hay caida y TECHO confirmados,
+            # inferir que cond2 se cumple (contexto: 5 meses de TECHO en 2026)
+            cond2 = cond3 and cond1
+
+        conditions = {"techos_consecutivos": cond3, "ppi_caida": cond1, "ppi_alza_previa": cond2}
+
+        if not (cond1 and cond2 and cond3):
+            no_apply["conditions_met"] = conditions
+            return no_apply
+
+        # Calcular reduccion: 10% de la variacion acumulada del PPI (valor absoluto de la caida)
+        reduccion_pct = abs(ppi_caida_acumulada) * cfg.DECRETO444_REDUCCION_FACTOR
+        # Tope maximo: 1.5% del precio vigente
+        reduccion_max = current_price * cfg.DECRETO444_REDUCCION_MAX
+        reduccion_aplicada = min(reduccion_pct * current_price, reduccion_max)
+
+        adjusted_price = round(result_price - reduccion_aplicada, 3)
+        adjusted_price = max(adjusted_price, current_price * 0.90)  # no bajar del piso ordinario
+
+        return {
+            "applies": True,
+            "adjusted_price": adjusted_price,
+            "adjusted_status": "DECRETO444",
+            "reduction_applied": reduccion_aplicada,
+            "conditions_met": conditions,
         }
 
     def simulate(self, wti_price: float, current_price: float, fuel_type: str) -> dict:

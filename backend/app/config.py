@@ -7,7 +7,7 @@ class Settings(BaseModel):
     """Configuracion de la aplicacion."""
 
     APP_NAME: str = "GasPredict Ecuador"
-    APP_VERSION: str = "1.2.0"
+    APP_VERSION: str = "1.3.0"
 
     # Tickers de Yahoo Finance
     WTI_TICKER: str = "CL=F"              # Crudo WTI
@@ -94,6 +94,25 @@ class Settings(BaseModel):
     BAND_FLOOR: float = -0.10     # -10% maximo mensual
     PRICE_UPDATE_DAY: int = 11    # Dia en que EP Petroecuador publica los precios (noche del 11)
     PRICE_EFFECTIVE_DAY: int = 12  # Dia en que el nuevo precio entra en vigencia
+
+    # Decreto Ejecutivo 444 (9 julio 2026) - Mecanismo excepcional de volatilidad
+    # Reforma el Decreto 83 (ago-2025). Activa una reduccion adicional cuando el mercado
+    # internacional cae bruscamente despues de un alza prolongada y Ecuador aplico TECHO.
+    #
+    # Condiciones de activacion (las 3 deben cumplirse simultaneamente):
+    #   1. PPI acumulo caida >= 15% en los 2 periodos bimestrales anteriores
+    #   2. PPI acumulo alza >= 50% en hasta 3 periodos trimestrales previos
+    #   3. El precio en terminal alcanzo el TECHO (+5%) en los 2 ultimos ajustes
+    #
+    # Formula de reduccion:
+    #   reduccion_mensual = 10% * variacion_acumulada_PPI_2_periodos
+    #   tope maximo de reduccion: 1.5% del precio vigente por mes
+    DECRETO444_ACTIVE: bool = True           # activar logica del D.E. 444
+    DECRETO444_PPI_CAIDA_MIN: float = 0.15   # caida PPI minima para activar (15%)
+    DECRETO444_PPI_ALZA_PREVIA: float = 0.50 # alza PPI previa necesaria (50%)
+    DECRETO444_TECHOS_REQUERIDOS: int = 2    # meses consecutivos en TECHO requeridos
+    DECRETO444_REDUCCION_FACTOR: float = 0.10  # reduccion = 10% de variacion PPI acumulada
+    DECRETO444_REDUCCION_MAX: float = 0.015  # tope maximo de reduccion mensual (1.5%)
 
     # Datos
     DEFAULT_HISTORY_YEARS: int = 6          # Desde 2020
