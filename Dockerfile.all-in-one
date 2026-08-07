@@ -66,8 +66,9 @@ COPY --from=frontend-builder /frontend/public ./public
 COPY --from=frontend-builder /frontend/.next/standalone ./
 COPY --from=frontend-builder /frontend/.next/static ./.next/static
 
-# ── Script de entrypoint ──────────────────────────────────────────────────────
+# ── Scripts y datos de inicialización ─────────────────────────────────────────
 COPY docker/entrypoint.sh /entrypoint.sh
+COPY docker/gaspredict_backup.sql /docker/gaspredict_backup.sql
 RUN chmod +x /entrypoint.sh
 
 # ── Puertos ───────────────────────────────────────────────────────────────────

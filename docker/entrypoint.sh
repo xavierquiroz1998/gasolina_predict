@@ -23,6 +23,16 @@ sleep 4
 su -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='${POSTGRES_USER}'\" | grep -q 1 || psql -c \"CREATE USER ${POSTGRES_USER} WITH PASSWORD '${POSTGRES_PASSWORD}';\"" postgres
 su -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'\" | grep -q 1 || psql -c \"CREATE DATABASE ${POSTGRES_DB} OWNER ${POSTGRES_USER};\"" postgres
 su -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE ${POSTGRES_DB} TO ${POSTGRES_USER};\"" postgres
+
+# Cargar historial si la tabla fuel_prices está vacía o no existe
+ROWS=$(su -c "psql -d ${POSTGRES_DB} -tc \"SELECT COUNT(*) FROM fuel_prices;\" 2>/dev/null || echo 0" postgres | tr -d ' ')
+if [ "$ROWS" = "0" ] || [ -z "$ROWS" ]; then
+    if [ -f /docker/gaspredict_backup.sql ]; then
+        echo "[1/3] Cargando historial de precios (2020-2026)..."
+        su -c "psql -d ${POSTGRES_DB} < /docker/gaspredict_backup.sql" postgres
+        echo "[1/3] Historial cargado."
+    fi
+fi
 echo "[1/3] PostgreSQL listo."
 
 # ── 2. Backend FastAPI ────────────────────────
