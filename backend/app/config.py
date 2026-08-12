@@ -7,7 +7,7 @@ class Settings(BaseModel):
     """Configuracion de la aplicacion."""
 
     APP_NAME: str = "GasPredict Ecuador"
-    APP_VERSION: str = "1.3.0"
+    APP_VERSION: str = "1.4.0"
 
     # Tickers de Yahoo Finance
     WTI_TICKER: str = "CL=F"              # Crudo WTI
@@ -113,6 +113,20 @@ class Settings(BaseModel):
     DECRETO444_TECHOS_REQUERIDOS: int = 2    # meses consecutivos en TECHO requeridos
     DECRETO444_REDUCCION_FACTOR: float = 0.10  # reduccion = 10% de variacion PPI acumulada
     DECRETO444_REDUCCION_MAX: float = 0.015  # tope maximo de reduccion mensual (1.5%)
+
+    # Decreto Ejecutivo 468 (11 agosto 2026) - Mecanismo de reduccion gradual
+    # Reemplaza la logica de banda ordinaria cuando esta activo: en lugar de subir
+    # al TECHO o calcular precio libre de mercado, aplica una reduccion mensual fija
+    # del precio vigente dentro del rango [0.75%, 1.5%].
+    # Empieza en el minimo (0.75%) y avanza progresivamente hasta el maximo (1.5%).
+    # Se desactiva cuando el PPI internacional sube >40% respecto al valor de 4 meses atras.
+    # Aplica a: Extra, EcoPais, Diesel. No aplica a Super 95 (precio libre).
+    DECRETO468_ACTIVE: bool = True
+    DECRETO468_FECHA_INICIO: str = "2026-08-12"   # vigencia desde esta fecha
+    DECRETO468_REDUCCION_MIN: float = 0.0075      # 0.75% reduccion minima mensual
+    DECRETO468_REDUCCION_MAX: float = 0.015       # 1.50% reduccion maxima mensual
+    DECRETO468_MESES_ACTIVO: int = 0              # meses que lleva activo (0=primer mes)
+    DECRETO468_PPI_ALZA_DESACTIVACION: float = 0.40  # se desactiva si PPI sube >40% en 4 meses
 
     # Datos
     DEFAULT_HISTORY_YEARS: int = 6          # Desde 2020

@@ -11,6 +11,11 @@ El sistema de bandas asimetricas establece:
     Cuando el PPI cayo >=15% en 2 periodos tras subir >=50% en 3 periodos previos
     Y Ecuador aplico TECHO en los 2 ultimos ajustes, se aplica una reduccion
     adicional de hasta 1.5% mensual (10% de la variacion acumulada del PPI).
+- Decreto Ejecutivo No. 468 (ago 2026) reemplaza la logica de banda ordinaria:
+    Aplica reduccion mensual fija de 0.75%-1.5% sobre el precio vigente.
+    Empieza en 0.75% (mes 1) y avanza progresivamente hasta 1.5%.
+    Se desactiva si el PPI internacional sube >40% respecto a 4 meses atras.
+    Aplica a Extra, EcoPais y Diesel. Super 95 sigue siendo precio libre.
 
 La formula de precio:
 Precio final = Precio en Terminal (con IVA) + Margen de Comercializacion (con IVA)
@@ -237,10 +242,27 @@ class BandCalculator:
             status = "DENTRO"
             capped = False
 
-        # Decreto 444: aplicar reduccion excepcional si las condiciones se cumplen
+        # Decreto 468: reduccion gradual mensual (ago-2026 en adelante)
+        # Tiene prioridad sobre el Decreto 444 y sobre la banda ordinaria.
         decreto444_applied = False
         decreto444_reduction = 0.0
-        if settings.DECRETO444_ACTIVE and fuel_type != "super_95":
+        decreto468_applied = False
+        decreto468_reduction = 0.0
+
+        if settings.DECRETO468_ACTIVE and fuel_type != "super_95":
+            d468 = self._apply_decreto468(
+                current_price=current_price,
+                ppi_history=ppi_history or [],
+            )
+            if d468["applies"]:
+                result_price = d468["adjusted_price"]
+                status = "DECRETO468"
+                capped = True
+                decreto468_applied = True
+                decreto468_reduction = d468["reduction_applied"]
+
+        elif settings.DECRETO444_ACTIVE and fuel_type != "super_95":
+            # D.E. 444 solo si D.E. 468 no esta activo
             d444 = self._apply_decreto444(
                 current_price=current_price,
                 result_price=result_price,
@@ -265,6 +287,8 @@ class BandCalculator:
             "change_pct": round(change_pct, 2),
             "decreto444_applied": decreto444_applied,
             "decreto444_reduction": round(decreto444_reduction, 4),
+            "decreto468_applied": decreto468_applied,
+            "decreto468_reduction": round(decreto468_reduction, 4),
         }
 
     def _apply_decreto444(
@@ -368,6 +392,69 @@ class BandCalculator:
             "adjusted_status": "DECRETO444",
             "reduction_applied": reduccion_aplicada,
             "conditions_met": conditions,
+        }
+
+    def _apply_decreto468(
+        self,
+        current_price: float,
+        ppi_history: list[float],
+    ) -> dict:
+        """Evalua y aplica el mecanismo de reduccion gradual del Decreto Ejecutivo 468.
+
+        Decreto Ejecutivo No. 468, firmado el 11 de agosto de 2026.
+        Establece que el precio en terminal del mes actual = precio_anterior * (1 - factor).
+        El factor de reduccion mensual avanza progresivamente: empieza en 0.75% (primer mes)
+        y puede llegar hasta 1.5% segun parametros tecnicos.
+
+        Logica de progresion del factor:
+          - Mes 1 (ago-2026): 0.75% (DECRETO468_REDUCCION_MIN)
+          - Mes 2 (sep-2026): 1.125% (punto medio)
+          - Mes 3+ (oct-2026 en adelante): 1.5% (DECRETO468_REDUCCION_MAX)
+
+        Condicion de desactivacion:
+          - Si el PPI internacional sube >40% respecto al valor de 4 meses atras,
+            el mecanismo se desactiva y vuelve a la banda ordinaria (D.E. 308).
+
+        Args:
+            current_price: Precio vigente en $/galon.
+            ppi_history: Historial de precios PPI (RBOB/ULSD) ordenados de mas antiguo
+                         a mas reciente. Se usa para verificar desactivacion.
+
+        Returns:
+            Dict con: applies (bool), adjusted_price, reduction_applied, factor_used.
+        """
+        cfg = settings
+
+        # Verificar condicion de desactivacion: PPI sube >40% en 4 meses
+        if len(ppi_history) >= 5:
+            ppi_hace_4 = ppi_history[-5]
+            ppi_actual = ppi_history[-1]
+            if ppi_hace_4 > 0:
+                alza_ppi = (ppi_actual - ppi_hace_4) / ppi_hace_4
+                if alza_ppi > cfg.DECRETO468_PPI_ALZA_DESACTIVACION:
+                    return {"applies": False, "adjusted_price": current_price,
+                            "reduction_applied": 0.0, "factor_used": 0.0}
+
+        # Calcular factor segun meses activo (progresion lineal 0.75% -> 1.5%)
+        meses = cfg.DECRETO468_MESES_ACTIVO  # 0 = primer mes (agosto)
+        r_min = cfg.DECRETO468_REDUCCION_MIN  # 0.0075
+        r_max = cfg.DECRETO468_REDUCCION_MAX  # 0.015
+
+        if meses == 0:
+            factor = r_min                          # mes 1: 0.75%
+        elif meses == 1:
+            factor = (r_min + r_max) / 2            # mes 2: 1.125%
+        else:
+            factor = r_max                          # mes 3+: 1.50%
+
+        reduccion = current_price * factor
+        adjusted_price = round(current_price - reduccion, 3)
+
+        return {
+            "applies": True,
+            "adjusted_price": adjusted_price,
+            "reduction_applied": round(reduccion, 4),
+            "factor_used": factor,
         }
 
     def simulate(self, wti_price: float, current_price: float, fuel_type: str) -> dict:

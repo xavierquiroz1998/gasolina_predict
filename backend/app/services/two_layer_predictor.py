@@ -194,12 +194,9 @@ class TwoLayerPredictor:
         derivative_price: float = None,
         band_history: list[str] | None = None,
         ppi_history: list[float] | None = None,
+        decreto468_offset: int = 0,
     ) -> dict:
         """Convierte precio de referencia en precio final de combustible aplicando formula y banda.
-
-        Usa el derivado refinado (RBOB/ULSD) si esta disponible — es el indicador
-        real del Decreto 308. Si no, usa WTI crudo como proxy.
-        Aplica el mecanismo excepcional del Decreto 444 si los historiales lo justifican.
 
         Args:
             wti_price: Precio del WTI en USD/barril (proxy o para Super 95).
@@ -208,21 +205,32 @@ class TwoLayerPredictor:
             derivative_price: Precio RBOB o ULSD Platts USGC en $/galon (opcional).
             band_history: Historial de estados de banda para Decreto 444 (opcional).
             ppi_history: Historial de precios PPI/RBOB/ULSD para Decreto 444 (opcional).
+            decreto468_offset: Meses adicionales desde inicio del D.E. 468 (para multi-mes).
 
         Returns:
             Dict con precio final, estado de banda, precio teorico, limites y desglose.
         """
+        from app.config import settings as cfg
+
+        # Para D.E. 468: ajustar meses activo segun el mes que se esta prediciendo
+        decreto468_meses = cfg.DECRETO468_MESES_ACTIVO + decreto468_offset
+        original_meses = cfg.DECRETO468_MESES_ACTIVO
+        cfg.__dict__["DECRETO468_MESES_ACTIVO"] = decreto468_meses
+
         # Formula del gobierno -> precio teorico
         theoretical_price = self._band_calc.calculate_theoretical_price(
             wti_price, fuel_type, derivative_price=derivative_price
         )
 
-        # Aplicar banda asimetrica + mecanismo excepcional Decreto 444
+        # Aplicar banda asimetrica + Decreto 444 o 468
         band_result = self._band_calc.apply_band(
             current_fuel_price, theoretical_price, fuel_type,
             band_history=band_history,
             ppi_history=ppi_history,
         )
+
+        # Restaurar valor original
+        cfg.__dict__["DECRETO468_MESES_ACTIVO"] = original_meses
 
         # Desglose de la formula
         breakdown = self._band_calc.get_formula_breakdown(wti_price, fuel_type)
@@ -239,6 +247,8 @@ class TwoLayerPredictor:
             "derivative_used": round(derivative_price, 4) if derivative_price else None,
             "decreto444_applied": band_result.get("decreto444_applied", False),
             "decreto444_reduction": band_result.get("decreto444_reduction", 0.0),
+            "decreto468_applied": band_result.get("decreto468_applied", False),
+            "decreto468_reduction": band_result.get("decreto468_reduction", 0.0),
             "formula_breakdown": breakdown,
         }
 
