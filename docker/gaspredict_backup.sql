@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict b2NfWYtcv4OVpAUgFy6xe4vFpkk40eJxYBdFNKF6qD8NbNh4oftxw50eNgKv8Wf
+\restrict h9mgMrOyNMa24uaGV2nzDTA91Jvj7gTk9oQpkrihaNrHafWPnSJSeBqeBymE2xu
 
 -- Dumped from database version 17.10 (Debian 17.10-0+deb13u1)
 -- Dumped by pg_dump version 17.10 (Debian 17.10-0+deb13u1)
@@ -875,6 +875,10 @@ COPY public.fuel_prices (id, date, fuel_type, price, previous_price, change_perc
 273	2026-03-11	extra	2.89	2.875	0.52	TECHO	2026-08-07 17:12:27.156801	2026-08-07 17:12:27.156801
 274	2026-03-11	ecopais	2.89	2.875	0.52	TECHO	2026-08-07 17:12:27.156801	2026-08-07 17:12:27.156802
 276	2026-03-11	diesel	2.828	2.8	1	TECHO	2026-08-07 17:12:27.156802	2026-08-07 17:12:27.156802
+293	2026-08-12	extra	3.242	3.265	-0.7	DECRETO468	\N	\N
+294	2026-08-12	ecopais	3.242	3.265	-0.7	DECRETO468	\N	\N
+295	2026-08-12	diesel	3.181	3.204	-0.72	DECRETO468	\N	\N
+296	2026-08-12	super_95	4.74	5.52	-14.13	LIBRE	\N	\N
 \.
 
 
@@ -891,10 +895,10 @@ COPY public.news_cache (id, title, source, url, published_date, sentiment, senti
 --
 
 COPY public.predictions (id, created_at, fuel_type, approach, target_date, predicted_price, actual_price, wti_predicted, wti_actual, band_status, accuracy_pct, model_weights, confidence_lower, confidence_upper) FROM stdin;
-1	2026-08-07 17:17:34.191214	extra	two_layer	2026-08-12	3.066	\N	\N	\N	DENTRO	\N	{"sarima": 0.1742, "xgboost": 0.4948, "lstm": 0.3309}	3.191	3.223
-2	2026-08-07 17:17:56.991102	ecopais	two_layer	2026-08-12	3.061	\N	\N	\N	DENTRO	\N	{"sarima": 0.185, "xgboost": 0.5253, "lstm": 0.2897}	3.2049	3.2371
-3	2026-08-07 17:18:12.812309	diesel	two_layer	2026-08-12	3.161	\N	\N	\N	DENTRO	\N	{"sarima": 0.1749, "xgboost": 0.4968, "lstm": 0.3282}	3.1213	3.1527
-4	2026-08-07 17:18:43.05634	super_95	two_layer	2026-08-12	4.745	\N	\N	\N	LIBRE	\N	{"sarima": 0.1793, "xgboost": 0.5093, "lstm": 0.3113}	4.5742	4.9158
+2	2026-08-12 19:11:55.593277	ecopais	two_layer	2026-08-12	3.061	\N	\N	\N	DENTRO	\N	{"sarima": 0.1808, "xgboost": 0.5135, "lstm": 0.3057}	3.1979	3.2301
+1	2026-08-12 19:26:14.809202	extra	two_layer	2026-08-12	3.241	\N	\N	\N	DECRETO468	\N	{"sarima": 0.1807, "xgboost": 0.5131, "lstm": 0.3062}	3.2248	3.2572
+3	2026-08-12 19:26:24.304201	diesel	two_layer	2026-08-12	3.18	\N	\N	\N	DECRETO468	\N	{"sarima": 0.1867, "xgboost": 0.5303, "lstm": 0.283}	3.1641	3.1959
+4	2026-08-12 19:26:34.081226	super_95	two_layer	2026-08-12	4.742	\N	\N	\N	LIBRE	\N	{"sarima": 0.1755, "xgboost": 0.4985, "lstm": 0.326}	4.5713	4.9127
 \.
 
 
@@ -1170,7 +1174,7 @@ COPY public.wti_predictions (id, created_at, target_month, predicted_avg, actual
 -- Name: fuel_prices_id_seq; Type: SEQUENCE SET; Schema: public; Owner: gaspredict
 --
 
-SELECT pg_catalog.setval('public.fuel_prices_id_seq', 292, true);
+SELECT pg_catalog.setval('public.fuel_prices_id_seq', 296, true);
 
 
 --
@@ -1269,5 +1273,5 @@ ALTER TABLE ONLY public.wti_predictions
 -- PostgreSQL database dump complete
 --
 
-\unrestrict b2NfWYtcv4OVpAUgFy6xe4vFpkk40eJxYBdFNKF6qD8NbNh4oftxw50eNgKv8Wf
+\unrestrict h9mgMrOyNMa24uaGV2nzDTA91Jvj7gTk9oQpkrihaNrHafWPnSJSeBqeBymE2xu
 
